@@ -220,7 +220,7 @@ class RMMotor : public LibXR::Application {
       case Model::MOTOR_M3508:
         return 0.0156224f;
       case Model::MOTOR_GM6020:
-        return 0.6f;
+        return 0.741f;
       default:
         return 0.0f;
     }
@@ -320,7 +320,7 @@ class RMMotor : public LibXR::Application {
     }
 
     float output =
-        std::clamp(torque * reduction_ratio / KGetTorque() / GetCurrentMAX(),
+        std::clamp(torque / reduction_ratio / KGetTorque() / GetCurrentMAX(),
                    -1.0f, 1.0f) *
         GetLSB();
 
