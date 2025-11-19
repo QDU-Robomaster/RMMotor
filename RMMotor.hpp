@@ -108,10 +108,8 @@ class RMMotor : public LibXR::Application {
   RMMotor(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
           const Param& param)
       : param_(param),
-        can_(hw.template FindOrExit<LibXR::CAN>({param_.can_bus_name})),
-        cmd_file_(InitCmdFile(param.feedback_id)) {
+        can_(hw.template FindOrExit<LibXR::CAN>({param_.can_bus_name})) {
     UNUSED(app);
-
     switch (param_.model) {
       case Model::MOTOR_M2006:
       case Model::MOTOR_M3508:
@@ -403,48 +401,6 @@ class RMMotor : public LibXR::Application {
 
   void OnMonitor() override {}
 
-  static int CommandFunc(RMMotor* self, int argc, char** argv) {
-    if (argc == 1) {
-      LibXR::STDIO::Printf("Usage:\r\n");
-      LibXR::STDIO::Printf(
-          "  monitor                          - Print motor feedback once\r\n");
-      LibXR::STDIO::Printf(
-          "  monitor <time_ms> [interval_ms]  - Monitor motor feedback\r\n");
-      return 0;
-    }
-
-    if (strcmp(argv[1], "monitor") != 0) {
-      LibXR::STDIO::Printf("Error: Unknown command '%s'.\r\n", argv[1]);
-      return -1;
-    }
-
-    auto print_feedback = [self]() {
-      self->Update();
-      LibXR::STDIO::Printf(
-          "[%lu ms][Motor %d] Angle: %.2f rad, RPM: %.0f, Current: %.2f A, "
-          "Temp: %.0f C\r\n",
-          LibXR::Thread::GetTime(), self->param_.feedback_id, self->GetAngle(),
-          self->GetRPM(), self->GetCurrent(), self->GetTemp());
-    };
-
-    if (argc == 2) {
-      print_feedback();
-    } else if (argc >= 3) {
-      int time = atoi(argv[2]);
-      int delay = (argc == 4) ? atoi(argv[3]) : 1000;
-      while (time > 0) {
-        print_feedback();
-        LibXR::Thread::Sleep(delay);
-        time -= delay;
-      }
-    } else {
-      LibXR::STDIO::Printf("Error: Invalid arguments.\r\n");
-      return -1;
-    }
-
-    return 0;
-  }
-
  private:
   /**
    * @brief CAN 接收回调的静态包装函数
@@ -461,23 +417,6 @@ class RMMotor : public LibXR::Application {
       self->recv_queue_.Pop();
     }
   }
-  LibXR::RamFS::File InitCmdFile(uint8_t motor_id) {
-    const char* prefix = "rmmotor:";
-    size_t prefix_len = strlen(prefix);
-    char motor_id_str[4];
-    int ret = snprintf(motor_id_str, sizeof(motor_id_str), "%d", motor_id);
-    if (ret < 0) {
-      motor_id_str[0] = '\0';
-    }
-    size_t id_len = strlen(motor_id_str);
-
-    cmd_name_ = new char[prefix_len + id_len + 1];
-    memcpy(cmd_name_, prefix, prefix_len);
-    memcpy(cmd_name_ + prefix_len, motor_id_str, id_len);
-    cmd_name_[prefix_len + id_len] = '\0';
-
-    return LibXR::RamFS::CreateFile(cmd_name_, CommandFunc, this);
-  }
 
   uint8_t index_;
   uint8_t num_;
@@ -488,6 +427,4 @@ class RMMotor : public LibXR::Application {
 
   LibXR::CAN* can_;
   LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};
-  LibXR::RamFS::File cmd_file_;
-  char* cmd_name_;
 };
