@@ -380,7 +380,7 @@ class RMMotor : public LibXR::Application {
     tx_pack.id = config_param_.id_control;
     tx_pack.type = LibXR::CAN::Type::STANDARD;
 
-    memcpy(tx_pack.data, motor_tx_buff_[index_], sizeof(tx_pack.data));
+    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[index_], sizeof(tx_pack.data));
 
     can_->AddMessage(tx_pack);
 
@@ -398,6 +398,8 @@ class RMMotor : public LibXR::Application {
     feedback_.torque_current = 0.0f;
     feedback_.temp = 0.0f;
   }
+
+  void Relax() { this->CurrentControl(0.0f); }
 
   void OnMonitor() override {}
 
