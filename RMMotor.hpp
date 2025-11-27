@@ -169,6 +169,8 @@ class RMMotor : public LibXR::Application {
 
     motor_tx_map_[motor_index] |= (1 << motor_num);
 
+    memset(motor_tx_buff_[index_], 0, sizeof(motor_tx_buff_[index_]));
+
     auto rx_callback = LibXR::CAN::Callback::Create(
         [](bool in_isr, RMMotor* self, const LibXR::CAN::ClassicPack& pack) {
           RxCallback(in_isr, self, pack);
@@ -303,8 +305,7 @@ class RMMotor : public LibXR::Application {
    * @brief 获取电机转子绝对角度
    * @return float 转子绝对角度(rad)
    */
-  float GetAngle() { return feedback_.rotor_abs_angle; }
-
+  float GetAngle() { return LibXR::CycleValue<float>(feedback_.rotor_abs_angle); }
   /**
    * @brief 设置电机的扭矩控制指令
    * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
@@ -369,6 +370,7 @@ class RMMotor : public LibXR::Application {
     }
   }
 
+
   /**
    * @brief 发送打包好的CAN控制报文
    * @details 从共享缓冲区拷贝数据到CAN包，通过CAN总线发送，并清零发送标志位。
@@ -385,6 +387,8 @@ class RMMotor : public LibXR::Application {
     can_->AddMessage(tx_pack);
 
     motor_tx_flag_[index_] = 0;
+
+    memset(motor_tx_buff_[index_], 0, sizeof(motor_tx_buff_[index_]));
 
     return true;
   }
