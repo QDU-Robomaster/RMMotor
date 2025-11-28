@@ -277,9 +277,9 @@ class RMMotor : public LibXR::Application {
    */
   float GetOmega() {
     if (param_.reverse) {
-      return -feedback_.rotor_rotation_speed / 184.6153f;
+      return -feedback_.rotor_rotation_speed/60.0f*static_cast<float>(M_2PI);
     } else {
-      return feedback_.rotor_rotation_speed / 184.6153f;
+      return feedback_.rotor_rotation_speed/60.0f*static_cast<float>(M_2PI);
     }
   }
 
