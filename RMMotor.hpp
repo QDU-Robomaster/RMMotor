@@ -277,9 +277,10 @@ class RMMotor : public LibXR::Application {
    */
   float GetOmega() {
     if (param_.reverse) {
-      return -feedback_.rotor_rotation_speed/60.0f*static_cast<float>(M_2PI);
+      return -feedback_.rotor_rotation_speed / 60.0f *
+             static_cast<float>(M_2PI);
     } else {
-      return feedback_.rotor_rotation_speed/60.0f*static_cast<float>(M_2PI);
+      return feedback_.rotor_rotation_speed / 60.0f * static_cast<float>(M_2PI);
     }
   }
 
@@ -305,7 +306,9 @@ class RMMotor : public LibXR::Application {
    * @brief 获取电机转子绝对角度
    * @return float 转子绝对角度(rad)
    */
-  float GetAngle() { return LibXR::CycleValue<float>(feedback_.rotor_abs_angle); }
+  float GetAngle() {
+    return LibXR::CycleValue<float>(feedback_.rotor_abs_angle);
+  }
   /**
    * @brief 设置电机的扭矩控制指令
    * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
@@ -336,6 +339,46 @@ class RMMotor : public LibXR::Application {
 
     if (((~motor_tx_flag_[index_]) & (motor_tx_map_[index_])) == 0) {
       SendData();
+    }
+  }
+  /**
+   * @brief 设置6020电机的电压控制指令
+   * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
+   *          当同一控制ID下的所有电机都更新指令后，触发CAN报文发送。
+              仅做临时测试使用
+   * @param out 归一化的电机电压输出值，范围 [-1.0, 1.0]
+   */
+  void VoltageControl(float out, uint16_t canid) {
+    out = std::clamp(out, -1.0f, 1.0f);
+    float output = std::clamp(out * 25000.0f, -25000.0f, 25000.0f);
+
+    if (param_.reverse) {
+      output = -output;
+    }
+    int16_t ctrl_cmd = static_cast<int16_t>(output);
+    motor_tx_buff_[index_][2 * num_] =
+        static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
+    motor_tx_buff_[index_][2 * num_ + 1] =
+        static_cast<uint8_t>(ctrl_cmd & 0xFF);
+    motor_tx_flag_[index_] |= 1 << (num_);
+
+    if (((~motor_tx_flag_[index_]) & (motor_tx_map_[index_])) == 0) {
+      LibXR::CAN::ClassicPack tx_pack{};
+      if ((canid - 0x204) < 5) {
+        tx_pack.id = 0x1FF;
+      } else {
+        tx_pack.id = 0x2FF;
+      }
+      tx_pack.type = LibXR::CAN::Type::STANDARD;
+
+      LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[index_],
+                              sizeof(tx_pack.data));
+
+      can_->AddMessage(tx_pack);
+
+      motor_tx_flag_[index_] = 0;
+
+      memset(motor_tx_buff_[index_], 0, sizeof(motor_tx_buff_[index_]));
     }
   }
 
@@ -370,7 +413,6 @@ class RMMotor : public LibXR::Application {
     }
   }
 
-
   /**
    * @brief 发送打包好的CAN控制报文
    * @details 从共享缓冲区拷贝数据到CAN包，通过CAN总线发送，并清零发送标志位。
@@ -382,7 +424,8 @@ class RMMotor : public LibXR::Application {
     tx_pack.id = config_param_.id_control;
     tx_pack.type = LibXR::CAN::Type::STANDARD;
 
-    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[index_], sizeof(tx_pack.data));
+    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[index_],
+                            sizeof(tx_pack.data));
 
     can_->AddMessage(tx_pack);
 
