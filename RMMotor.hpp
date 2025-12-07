@@ -95,9 +95,10 @@ class RMMotor : public LibXR::Application {
     float temp = 0.0f;
   };
 
-  static inline uint8_t motor_tx_buff_[MOTOR_CTRL_ID_NUMBER][8]{};
-  static inline uint8_t motor_tx_flag_[MOTOR_CTRL_ID_NUMBER]{};
-  static inline uint8_t motor_tx_map_[MOTOR_CTRL_ID_NUMBER]{};
+  // 每条 CAN 总线一套打包缓冲，按 control_id 再细分
+  static inline uint8_t motor_tx_buff_[2][MOTOR_CTRL_ID_NUMBER][8]{};
+  static inline uint8_t motor_tx_flag_[2][MOTOR_CTRL_ID_NUMBER]{};
+  static inline uint8_t motor_tx_map_[2][MOTOR_CTRL_ID_NUMBER]{};
 
   /**
    * @brief RMMotor 类的构造函数
@@ -167,9 +168,18 @@ class RMMotor : public LibXR::Application {
     index_ = motor_index;
     num_ = motor_num;
 
-    motor_tx_map_[motor_index] |= (1 << motor_num);
+    // 根据 CAN 设备名称区分不同总线，简单映射为 0/1
+    if (std::strcmp(param_.can_bus_name, "can2") == 0 ||
+        std::strcmp(param_.can_bus_name, "CAN2") == 0) {
+      can_index_ = 1;
+    } else {
+      can_index_ = 0;
+    }
 
-    memset(motor_tx_buff_[index_], 0, sizeof(motor_tx_buff_[index_]));
+    motor_tx_map_[can_index_][motor_index] |= (1 << motor_num);
+
+    memset(motor_tx_buff_[can_index_][index_], 0,
+           sizeof(motor_tx_buff_[can_index_][index_]));
 
     auto rx_callback = LibXR::CAN::Callback::Create(
         [](bool in_isr, RMMotor* self, const LibXR::CAN::ClassicPack& pack) {
@@ -309,6 +319,12 @@ class RMMotor : public LibXR::Application {
   float GetAngle() {
     return LibXR::CycleValue<float>(feedback_.rotor_abs_angle);
   }
+
+  /**
+  * @brief 获取电机反转状态
+  * @return bool 如果电机设置为反转则返回true，否则返回false
+  */
+  bool GetReverse() { return param_.reverse; }
   /**
    * @brief 设置电机的扭矩控制指令
    * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
@@ -331,13 +347,14 @@ class RMMotor : public LibXR::Application {
     }
 
     int16_t ctrl_cmd = static_cast<int16_t>(output);
-    motor_tx_buff_[index_][2 * num_] =
+    motor_tx_buff_[can_index_][index_][2 * num_] =
         static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
-    motor_tx_buff_[index_][2 * num_ + 1] =
+    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
         static_cast<uint8_t>(ctrl_cmd & 0xFF);
-    motor_tx_flag_[index_] |= 1 << (num_);
+    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
 
-    if (((~motor_tx_flag_[index_]) & (motor_tx_map_[index_])) == 0) {
+    if (((~motor_tx_flag_[can_index_][index_]) &
+       (motor_tx_map_[can_index_][index_])) == 0) {
       SendData();
     }
   }
@@ -356,13 +373,14 @@ class RMMotor : public LibXR::Application {
       output = -output;
     }
     int16_t ctrl_cmd = static_cast<int16_t>(output);
-    motor_tx_buff_[index_][2 * num_] =
+    motor_tx_buff_[can_index_][index_][2 * num_] =
         static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
-    motor_tx_buff_[index_][2 * num_ + 1] =
+    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
         static_cast<uint8_t>(ctrl_cmd & 0xFF);
-    motor_tx_flag_[index_] |= 1 << (num_);
+    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
 
-    if (((~motor_tx_flag_[index_]) & (motor_tx_map_[index_])) == 0) {
+    if (((~motor_tx_flag_[can_index_][index_]) &
+       (motor_tx_map_[can_index_][index_])) == 0) {
       LibXR::CAN::ClassicPack tx_pack{};
       if ((canid - 0x204) < 5) {
         tx_pack.id = 0x1FF;
@@ -371,14 +389,15 @@ class RMMotor : public LibXR::Application {
       }
       tx_pack.type = LibXR::CAN::Type::STANDARD;
 
-      LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[index_],
+      LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[can_index_][index_],
                               sizeof(tx_pack.data));
 
       can_->AddMessage(tx_pack);
 
-      motor_tx_flag_[index_] = 0;
+            motor_tx_flag_[can_index_][index_] = 0;
 
-      memset(motor_tx_buff_[index_], 0, sizeof(motor_tx_buff_[index_]));
+            memset(motor_tx_buff_[can_index_][index_], 0,
+              sizeof(motor_tx_buff_[can_index_][index_]));
     }
   }
 
@@ -402,13 +421,14 @@ class RMMotor : public LibXR::Application {
     }
 
     int16_t ctrl_cmd = static_cast<int16_t>(output);
-    motor_tx_buff_[index_][2 * num_] =
+    motor_tx_buff_[can_index_][index_][2 * num_] =
         static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
-    motor_tx_buff_[index_][2 * num_ + 1] =
+    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
         static_cast<uint8_t>(ctrl_cmd & 0xFF);
-    motor_tx_flag_[index_] |= 1 << (num_);
+    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
 
-    if (((~motor_tx_flag_[index_]) & (motor_tx_map_[index_])) == 0) {
+    if (((~motor_tx_flag_[can_index_][index_]) &
+       (motor_tx_map_[can_index_][index_])) == 0) {
       SendData();
     }
   }
@@ -424,14 +444,15 @@ class RMMotor : public LibXR::Application {
     tx_pack.id = config_param_.id_control;
     tx_pack.type = LibXR::CAN::Type::STANDARD;
 
-    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[index_],
+    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[can_index_][index_],
                             sizeof(tx_pack.data));
 
     can_->AddMessage(tx_pack);
 
-    motor_tx_flag_[index_] = 0;
+        motor_tx_flag_[can_index_][index_] = 0;
 
-    memset(motor_tx_buff_[index_], 0, sizeof(motor_tx_buff_[index_]));
+        memset(motor_tx_buff_[can_index_][index_], 0,
+          sizeof(motor_tx_buff_[can_index_][index_]));
 
     return true;
   }
@@ -467,6 +488,7 @@ class RMMotor : public LibXR::Application {
     }
   }
 
+  uint8_t can_index_{};  // 0: can1, 1: can2
   uint8_t index_;
   uint8_t num_;
 
