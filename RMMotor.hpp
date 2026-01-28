@@ -21,6 +21,7 @@ depends: []
 #include <cstdint>
 #include <cstring>
 
+#include "Motor.hpp"
 #include "app_framework.hpp"
 #include "can.hpp"
 #include "cycle_value.hpp"
@@ -61,7 +62,7 @@ depends: []
 #define MOTOR_ENC_RES (8192)  /* 电机编码器分辨率 */
 #define MOTOR_CUR_RES (16384) /* 电机转矩电流分辨率 */
 
-class RMMotor : public LibXR::Application {
+class RMMotor : public LibXR::Application, public Motor {
  public:
   /**
    * @brief 电机型号
@@ -88,13 +89,6 @@ class RMMotor : public LibXR::Application {
     uint32_t id_control;
   };
 
-  struct Feedback {
-    float rotor_abs_angle = 0.0f;
-    float rotor_rotation_speed = 0.0f;
-    float torque_current = 0.0f;
-    float temp = 0.0f;
-  };
-
   // 每条 CAN 总线一套打包缓冲，按 control_id 再细分
   static inline uint8_t motor_tx_buff_[2][MOTOR_CTRL_ID_NUMBER][8]{};
   static inline uint8_t motor_tx_flag_[2][MOTOR_CTRL_ID_NUMBER]{};
@@ -111,6 +105,7 @@ class RMMotor : public LibXR::Application {
       : param_(param),
         can_(hw.template FindOrExit<LibXR::CAN>({param_.can_bus_name})) {
     UNUSED(app);
+    reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
     switch (param_.model) {
       case Model::MOTOR_M2006:
       case Model::MOTOR_M3508:
@@ -168,10 +163,9 @@ class RMMotor : public LibXR::Application {
     index_ = motor_index;
     num_ = motor_num;
 
-    // 根据 CAN 设备名称区分不同总线，简单映射为 0/1
-    if (std::strcmp(param_.can_bus_name, "can2") == 0 ||
-        std::strcmp(param_.can_bus_name, "CAN2") == 0) {
-      can_index_ = 1;
+    int id = 0;
+    if (std::sscanf(param_.can_bus_name, "%*[^0-9]%d", &id) == 1) {
+      can_index_ = id;
     } else {
       can_index_ = 0;
     }
@@ -192,12 +186,91 @@ class RMMotor : public LibXR::Application {
                    config_param_.id_feedback);
   }
 
-  bool Update() {
+  void Enable() override { return; }
+
+  void Disable() override { CurrentControl(0.0f); }
+
+  void Relax() override { this->CurrentControl(0.0f); }
+
+  ErrorCode Update() override {
     LibXR::CAN::ClassicPack pack;
     while (recv_queue_.Pop(pack) == ErrorCode::OK) {
       this->Decode(pack);
     }
+    return ErrorCode::OK;
+  }
+
+  const Feedback& GetFeedback() override { return feedback_; }
+
+  void Control(const MotorCmd& cmd) override {
+    switch (cmd.mode) {
+      case ControlMode::MODE_TORQUE:
+        this->TorqueControl(cmd.torque, cmd.reduction_ratio);
+        break;
+      case ControlMode::MODE_CURRENT:
+        this->CurrentControl(cmd.velocity);
+        break;
+      default:
+        break;
+    }
+  }
+
+  void ClearError() override { return; }
+  void SaveZeroPoint() override { return; }
+
+ private:
+  uint8_t can_index_{};  // 0: can1, 1: can2
+  uint8_t index_;
+  uint8_t num_;
+
+  float reverse_flag_ = 1.0f;
+
+  Param param_;
+  ConfigParam config_param_;
+  Motor::Feedback feedback_;
+
+  LibXR::CAN* can_;
+  LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};
+
+  /*---------------------工具函数---------------------------------------------*/
+  /**
+   * @brief 发送打包好的CAN控制报文
+   * @details 从共享缓冲区拷贝数据到CAN包，通过CAN总线发送，并清零发送标志位。
+   * @return bool 总是返回 true
+   */
+  bool SendData() {
+    LibXR::CAN::ClassicPack tx_pack{};
+
+    tx_pack.id = config_param_.id_control;
+    tx_pack.type = LibXR::CAN::Type::STANDARD;
+
+    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[can_index_][index_],
+                            sizeof(tx_pack.data));
+
+    can_->AddMessage(tx_pack);
+
+    motor_tx_flag_[can_index_][index_] = 0;
+
+    memset(motor_tx_buff_[can_index_][index_], 0,
+           sizeof(motor_tx_buff_[can_index_][index_]));
+
     return true;
+  }
+
+  /**
+   * @brief CAN 接收回调的静态包装函数
+   * @details
+   * 将接收到的CAN数据包推入无锁队列中，供后续处理。如果队列已满，则丢弃最旧的数据包。
+   * @param in_isr 指示是否在中断服务程序中调用
+   * @param self 用户提供的参数，这里是 RMMotor 实例的指针
+   * @param pack 接收到的 CAN 数据包
+   */
+  static void RxCallback(bool in_isr, RMMotor* self,
+                         const LibXR::CAN::ClassicPack& pack) {
+    UNUSED(in_isr);
+    while (self->recv_queue_.Push(pack) != ErrorCode::OK) {
+      self->recv_queue_.Pop();
+    }
   }
 
   /**
@@ -209,14 +282,79 @@ class RMMotor : public LibXR::Application {
         static_cast<uint16_t>((pack.data[0] << 8) | pack.data[1]);
     int16_t raw_current =
         static_cast<int16_t>((pack.data[4] << 8) | pack.data[5]);
+    if (!param_.reverse) {
+      feedback_.position = static_cast<float>(raw_angle) / MOTOR_ENC_RES *
+                           static_cast<float>(M_2PI);
+      feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
+      feedback_.velocity =
+          static_cast<float>((pack.data[2] << 8) | pack.data[3]);
+      feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
+                         M3508_MAX_ABS_CUR / MOTOR_CUR_RES;
+      feedback_.temp = pack.data[6];
+    } else {
+      feedback_.position = -static_cast<float>(raw_angle) / MOTOR_ENC_RES *
+                           static_cast<float>(M_2PI);
+      feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
+      feedback_.velocity =
+          -static_cast<float>((pack.data[2] << 8) | pack.data[3]);
+      feedback_.omega = feedback_.velocity / 60.0f * static_cast<float>(M_2PI);
+      feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
+                         M3508_MAX_ABS_CUR / MOTOR_CUR_RES;
+      feedback_.temp = pack.data[6];
+    }
+  }
 
-    feedback_.rotor_abs_angle = static_cast<float>(raw_angle) / MOTOR_ENC_RES *
-                                static_cast<float>(M_2PI);
-    feedback_.rotor_rotation_speed =
-        static_cast<int16_t>((pack.data[2] << 8) | pack.data[3]);
-    feedback_.torque_current =
-        static_cast<float>(raw_current) * M3508_MAX_ABS_CUR / MOTOR_CUR_RES;
-    feedback_.temp = pack.data[6];
+  void TorqueControl(float torque, float reduction_ratio) {
+    if (feedback_.temp > 75.0f) {
+      torque = 0.0f;
+      XR_LOG_WARN("motor %d high temperature detected", param_.feedback_id);
+    }
+
+    float output =
+        std::clamp(torque / reduction_ratio / KGetTorque() / GetCurrentMAX(),
+                   -1.0f, 1.0f) *
+        GetLSB() * reverse_flag_;
+
+    int16_t ctrl_cmd = static_cast<int16_t>(output);
+    motor_tx_buff_[can_index_][index_][2 * num_] =
+        static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
+    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
+        static_cast<uint8_t>(ctrl_cmd & 0xFF);
+    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
+
+    if (((~motor_tx_flag_[can_index_][index_]) &
+         (motor_tx_map_[can_index_][index_])) == 0) {
+      SendData();
+    }
+  }
+
+  /**
+   * @brief 设置电机的输出轴转速控制指令
+   * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
+   *          当同一控制ID下的所有电机都更新指令后，触发CAN报文发送。
+   * @param out 归一化的电机转速输出值，范围 [-1.0, 1.0]
+   */
+  void CurrentControl(float out) {
+    if (feedback_.temp > 75.0f) {
+      out = 0.0f;
+      XR_LOG_WARN("motor %d high temperature detected", param_.feedback_id);
+    }
+
+    out = std::clamp(out, -1.0f, 1.0f);
+    float output =
+        std::clamp(out * GetLSB(), -GetLSB(), GetLSB()) * reverse_flag_;
+
+    int16_t ctrl_cmd = static_cast<int16_t>(output);
+    motor_tx_buff_[can_index_][index_][2 * num_] =
+        static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
+    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
+        static_cast<uint8_t>(ctrl_cmd & 0xFF);
+    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
+
+    if (((~motor_tx_flag_[can_index_][index_]) &
+         (motor_tx_map_[can_index_][index_])) == 0) {
+      SendData();
+    }
   }
 
   /**
@@ -268,234 +406,4 @@ class RMMotor : public LibXR::Application {
         return 0.0f;
     }
   }
-
-  /**
-   * @brief 获取电机转速(RPM)
-   * @return float 电机转速，如果设置了反向则返回负值
-   */
-  float GetRPM() {
-    if (param_.reverse) {
-      return -feedback_.rotor_rotation_speed;
-    } else {
-      return feedback_.rotor_rotation_speed;
-    }
-  }
-
-  /**
-   * @brief 获取电机角速度(rad/s)
-   * @return float 电机角速度，如果设置了反向则返回负值
-   */
-  float GetOmega() {
-    if (param_.reverse) {
-      return -feedback_.rotor_rotation_speed / 60.0f *
-             static_cast<float>(M_2PI);
-    } else {
-      return feedback_.rotor_rotation_speed / 60.0f * static_cast<float>(M_2PI);
-    }
-  }
-
-  /**      // 处理错误情况，尽管在此场景下几乎不可能发生
-   * @brief 获取电机扭矩电流
-   * @return float 扭矩电流(A)，如果设置了反向则返回负值
-   */
-  float GetCurrent() {
-    if (param_.reverse) {
-      return -feedback_.torque_current;
-    } else {
-      return feedback_.torque_current;
-    }
-  }
-
-  /**
-   * @brief 获取电机温度
-   * @return float 电机温度(°C)
-   */
-  float GetTemp() { return feedback_.temp; }
-
-  /**
-   * @brief 获取电机转子绝对角度
-   * @return float 转子绝对角度(rad)
-   */
-  float GetAngle() {
-    return LibXR::CycleValue<float>(feedback_.rotor_abs_angle);
-  }
-
-  /**
-  * @brief 获取电机反转状态
-  * @return bool 如果电机设置为反转则返回true，否则返回false
-  */
-  bool GetReverse() { return param_.reverse; }
-  /**
-   * @brief 设置电机的扭矩控制指令
-   * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
-   *          当同一控制ID下的所有电机都更新指令后，触发CAN报文发送。
-   * @param torque 归一化的电机扭矩输出值，范围 [-6.0, 6.0](M3508)
-   */
-  void TorqueControl(float torque, float reduction_ratio) {
-    if (feedback_.temp > 75.0f) {
-      torque = 0.0f;
-      XR_LOG_WARN("motor %d high temperature detected", param_.feedback_id);
-    }
-
-    float output =
-        std::clamp(torque / reduction_ratio / KGetTorque() / GetCurrentMAX(),
-                   -1.0f, 1.0f) *
-        GetLSB();
-
-    if (param_.reverse) {
-      output = -output;
-    }
-
-    int16_t ctrl_cmd = static_cast<int16_t>(output);
-    motor_tx_buff_[can_index_][index_][2 * num_] =
-        static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
-    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
-        static_cast<uint8_t>(ctrl_cmd & 0xFF);
-    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
-
-    if (((~motor_tx_flag_[can_index_][index_]) &
-       (motor_tx_map_[can_index_][index_])) == 0) {
-      SendData();
-    }
-  }
-  /**
-   * @brief 设置6020电机的电压控制指令
-   * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
-   *          当同一控制ID下的所有电机都更新指令后，触发CAN报文发送。
-              仅做临时测试使用
-   * @param out 归一化的电机电压输出值，范围 [-1.0, 1.0]
-   */
-  void VoltageControl(float out, uint16_t canid) {
-    out = std::clamp(out, -1.0f, 1.0f);
-    float output = std::clamp(out * 25000.0f, -25000.0f, 25000.0f);
-
-    if (param_.reverse) {
-      output = -output;
-    }
-    int16_t ctrl_cmd = static_cast<int16_t>(output);
-    motor_tx_buff_[can_index_][index_][2 * num_] =
-        static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
-    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
-        static_cast<uint8_t>(ctrl_cmd & 0xFF);
-    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
-
-    if (((~motor_tx_flag_[can_index_][index_]) &
-       (motor_tx_map_[can_index_][index_])) == 0) {
-      LibXR::CAN::ClassicPack tx_pack{};
-      if ((canid - 0x204) < 5) {
-        tx_pack.id = 0x1FF;
-      } else {
-        tx_pack.id = 0x2FF;
-      }
-      tx_pack.type = LibXR::CAN::Type::STANDARD;
-
-      LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[can_index_][index_],
-                              sizeof(tx_pack.data));
-
-      can_->AddMessage(tx_pack);
-
-            motor_tx_flag_[can_index_][index_] = 0;
-
-            memset(motor_tx_buff_[can_index_][index_], 0,
-              sizeof(motor_tx_buff_[can_index_][index_]));
-    }
-  }
-
-  /**
-   * @brief 设置电机的输出轴转速控制指令
-   * @details 将归一化的输出值转换为16位整数指令，存入共享发送缓冲区。
-   *          当同一控制ID下的所有电机都更新指令后，触发CAN报文发送。
-   * @param out 归一化的电机转速输出值，范围 [-1.0, 1.0]
-   */
-  void CurrentControl(float out) {
-    if (feedback_.temp > 75.0f) {
-      out = 0.0f;
-      XR_LOG_WARN("motor %d high temperature detected", param_.feedback_id);
-    }
-
-    out = std::clamp(out, -1.0f, 1.0f);
-    float output = std::clamp(out * GetLSB(), -GetLSB(), GetLSB());
-
-    if (param_.reverse) {
-      output = -output;
-    }
-
-    int16_t ctrl_cmd = static_cast<int16_t>(output);
-    motor_tx_buff_[can_index_][index_][2 * num_] =
-        static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
-    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
-        static_cast<uint8_t>(ctrl_cmd & 0xFF);
-    motor_tx_flag_[can_index_][index_] |= 1 << (num_);
-
-    if (((~motor_tx_flag_[can_index_][index_]) &
-       (motor_tx_map_[can_index_][index_])) == 0) {
-      SendData();
-    }
-  }
-
-  /**
-   * @brief 发送打包好的CAN控制报文
-   * @details 从共享缓冲区拷贝数据到CAN包，通过CAN总线发送，并清零发送标志位。
-   * @return bool 总是返回 true
-   */
-  bool SendData() {
-    LibXR::CAN::ClassicPack tx_pack{};
-
-    tx_pack.id = config_param_.id_control;
-    tx_pack.type = LibXR::CAN::Type::STANDARD;
-
-    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[can_index_][index_],
-                            sizeof(tx_pack.data));
-
-    can_->AddMessage(tx_pack);
-
-        motor_tx_flag_[can_index_][index_] = 0;
-
-        memset(motor_tx_buff_[can_index_][index_], 0,
-          sizeof(motor_tx_buff_[can_index_][index_]));
-
-    return true;
-  }
-
-  /**
-   * @brief 将电机反馈数据清零，用于电机离线状态
-   */
-  void Offline() {
-    feedback_.rotor_abs_angle = 0.0f;
-    feedback_.rotor_rotation_speed = 0.0f;
-    feedback_.torque_current = 0.0f;
-    feedback_.temp = 0.0f;
-  }
-
-  void Relax() { this->CurrentControl(0.0f); }
-
-  void OnMonitor() override {}
-
- private:
-  /**
-   * @brief CAN 接收回调的静态包装函数
-   * @details
-   * 将接收到的CAN数据包推入无锁队列中，供后续处理。如果队列已满，则丢弃最旧的数据包。
-   * @param in_isr 指示是否在中断服务程序中调用
-   * @param self 用户提供的参数，这里是 RMMotor 实例的指针
-   * @param pack 接收到的 CAN 数据包
-   */
-  static void RxCallback(bool in_isr, RMMotor* self,
-                         const LibXR::CAN::ClassicPack& pack) {
-    UNUSED(in_isr);
-    while (self->recv_queue_.Push(pack) != ErrorCode::OK) {
-      self->recv_queue_.Pop();
-    }
-  }
-
-  uint8_t can_index_{};  // 0: can1, 1: can2
-  uint8_t index_;
-  uint8_t num_;
-
-  Param param_;
-  ConfigParam config_param_;
-  Feedback feedback_;
-
-  LibXR::CAN* can_;
-  LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};
 };
