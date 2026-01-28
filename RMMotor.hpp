@@ -217,6 +217,7 @@ class RMMotor : public LibXR::Application, public Motor {
 
   void ClearError() override { return; }
   void SaveZeroPoint() override { return; }
+  void OnMonitor() override {}
 
  private:
   uint8_t can_index_{};  // 0: can1, 1: can2
