@@ -281,28 +281,33 @@ class RMMotor : public LibXR::Application, public Motor {
   void Decode(LibXR::CAN::ClassicPack& pack) {
     uint16_t raw_angle =
         static_cast<uint16_t>((pack.data[0] << 8) | pack.data[1]);
+    int16_t raw_velocity =
+        static_cast<int16_t>((pack.data[2] << 8) | pack.data[3]);
     int16_t raw_current =
         static_cast<int16_t>((pack.data[4] << 8) | pack.data[5]);
-    if (!param_.reverse) {
-      feedback_.position = static_cast<float>(raw_angle) / MOTOR_ENC_RES *
-                           static_cast<float>(M_2PI);
-      feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
-      feedback_.velocity =
-          static_cast<float>((pack.data[2] << 8) | pack.data[3]);
-      feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
-                         M3508_MAX_ABS_CUR / MOTOR_CUR_RES;
-      feedback_.temp = pack.data[6];
-    } else {
+    uint8_t raw_temp = pack.data[6];
+
+    if (param_.reverse) {
       feedback_.position = -static_cast<float>(raw_angle) / MOTOR_ENC_RES *
                            static_cast<float>(M_2PI);
-      feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
-      feedback_.velocity =
-          -static_cast<float>((pack.data[2] << 8) | pack.data[3]);
-      feedback_.omega = feedback_.velocity / 60.0f * static_cast<float>(M_2PI);
-      feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
-                         M3508_MAX_ABS_CUR / MOTOR_CUR_RES;
-      feedback_.temp = pack.data[6];
+
+      feedback_.velocity = static_cast<float>(-raw_velocity);
+
+    } else {
+      feedback_.position = static_cast<float>(raw_angle) / MOTOR_ENC_RES *
+                           static_cast<float>(M_2PI);
+
+      feedback_.velocity = static_cast<float>(raw_velocity);
     }
+
+    feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
+
+    feedback_.omega = feedback_.velocity * (static_cast<float>(M_2PI) / 60.0f);
+
+    feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
+                       GetCurrentMAX() / MOTOR_CUR_RES;
+
+    feedback_.temp = static_cast<float>(raw_temp);
   }
 
   void TorqueControl(float torque, float reduction_ratio) {
