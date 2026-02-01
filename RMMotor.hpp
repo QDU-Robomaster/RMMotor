@@ -27,6 +27,7 @@ depends: []
 #include "cycle_value.hpp"
 #include "libxr_def.hpp"
 #include "libxr_type.hpp"
+#include "mutex.hpp"
 #include "ramfs.hpp"
 #include "thread.hpp"
 
@@ -89,7 +90,6 @@ class RMMotor : public LibXR::Application, public Motor {
     uint32_t id_control;
   };
 
-  // 每条 CAN 总线一套打包缓冲，按 control_id 再细分
   static inline uint8_t motor_tx_buff_[2][MOTOR_CTRL_ID_NUMBER][8]{};
   static inline uint8_t motor_tx_flag_[2][MOTOR_CTRL_ID_NUMBER]{};
   static inline uint8_t motor_tx_map_[2][MOTOR_CTRL_ID_NUMBER]{};
@@ -163,11 +163,12 @@ class RMMotor : public LibXR::Application, public Motor {
     index_ = motor_index;
     num_ = motor_num;
 
-    int id = 0;
-    if (std::sscanf(param_.can_bus_name, "%*[^0-9]%d", &id) == 1) {
-      can_index_ = id;
+    if (const char* p = std::strpbrk(param_.can_bus_name, "12")) {
+      can_index_ = *p - '1';
     } else {
-      can_index_ = 0;
+      /*长官，这里必须设为非法值（如0xFF），绝不能设为0！*/
+      /*设为0就是资敌！*/
+      can_index_ = 0xFF;
     }
 
     motor_tx_map_[can_index_][motor_index] |= (1 << motor_num);
@@ -232,6 +233,7 @@ class RMMotor : public LibXR::Application, public Motor {
 
   LibXR::CAN* can_;
   LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};
+  LibXR::Mutex mutex_;
 
   /*---------------------工具函数---------------------------------------------*/
   /**
@@ -341,6 +343,10 @@ class RMMotor : public LibXR::Application, public Motor {
    * @param out 归一化的电机转速输出值，范围 [-1.0, 1.0]
    */
   void CurrentControl(float out) {
+    if (can_index_ == 0xFF) {
+      return;
+    }
+
     if (feedback_.temp > 75.0f) {
       out = 0.0f;
       XR_LOG_WARN("motor %d high temperature detected", param_.feedback_id);
@@ -351,6 +357,7 @@ class RMMotor : public LibXR::Application, public Motor {
         std::clamp(out * GetLSB(), -GetLSB(), GetLSB()) * reverse_flag_;
 
     int16_t ctrl_cmd = static_cast<int16_t>(output);
+    mutex_.Lock();
     motor_tx_buff_[can_index_][index_][2 * num_] =
         static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
     motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
@@ -361,6 +368,7 @@ class RMMotor : public LibXR::Application, public Motor {
          (motor_tx_map_[can_index_][index_])) == 0) {
       SendData();
     }
+    mutex_.Unlock();
   }
 
   /**
