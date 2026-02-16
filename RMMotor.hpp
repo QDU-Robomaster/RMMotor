@@ -310,7 +310,7 @@ class RMMotor : public LibXR::Application, public Motor {
                        GetCurrentMAX() / MOTOR_CUR_RES;
 
     feedback_.temp = static_cast<float>(raw_temp);
-/*默认大疆电机上电就使能*/
+    /*默认大疆电机上电就使能*/
     feedback_.state = 1;
   }
 
