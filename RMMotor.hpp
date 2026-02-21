@@ -365,8 +365,8 @@ class RMMotor : public LibXR::Application, public Motor {
         static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
     const bool TIMEOUT =
         !ALL_READY &&
-        (static_cast<uint32_t>(
-             NOW_MS - motor_tx_start_time_ms_[can_index_][index_]) >=
+        (static_cast<uint32_t>(NOW_MS -
+                               motor_tx_start_time_ms_[can_index_][index_]) >=
          MOTOR_TX_TIMEOUT_MS);
 
     if (ALL_READY || TIMEOUT) {
