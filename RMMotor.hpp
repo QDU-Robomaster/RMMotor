@@ -266,6 +266,7 @@ class RMMotor : public LibXR::Application, public Motor {
 
     tx_pack.id = config_param_.id_control;
     tx_pack.type = LibXR::CAN::Type::STANDARD;
+    tx_pack.dlc = 8;
 
     LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[can_index_][index_],
                             sizeof(tx_pack.data));
