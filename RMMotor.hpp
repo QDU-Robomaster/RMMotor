@@ -203,10 +203,12 @@ class RMMotor : public LibXR::Application, public Motor {
 
   ErrorCode Update() override {
     LibXR::CAN::ClassicPack pack;
+    bool get_feedback = false;
     while (recv_queue_.Pop(pack) == ErrorCode::OK) {
       this->Decode(pack);
+      get_feedback = true;
     }
-    return ErrorCode::OK;
+    return get_feedback ? ErrorCode::OK : ErrorCode::NO_RESPONSE;
   }
 
   const Feedback& GetFeedback() override { return feedback_; }
