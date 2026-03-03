@@ -63,7 +63,6 @@ depends: []
 
 #define MOTOR_ENC_RES (8192)  /* 电机编码器分辨率 */
 #define MOTOR_CUR_RES (16384) /* 电机转矩电流分辨率 */
-#define MOTOR_TX_TIMEOUT_MS (2U)
 
 class RMMotor : public LibXR::Application, public Motor {
  public:
@@ -93,10 +92,12 @@ class RMMotor : public LibXR::Application, public Motor {
   };
 
   static inline uint8_t motor_tx_buff_[2][MOTOR_CTRL_ID_NUMBER][8]{};
-  static inline uint8_t motor_tx_flag_[2][MOTOR_CTRL_ID_NUMBER]{};
-  static inline uint8_t motor_tx_map_[2][MOTOR_CTRL_ID_NUMBER]{};
-  static inline uint8_t motor_group_lock_[2][MOTOR_CTRL_ID_NUMBER]{};
-  static inline uint32_t motor_tx_start_time_ms_[2][MOTOR_CTRL_ID_NUMBER]{};
+  static inline uint8_t motor_tx_state_[2][MOTOR_CTRL_ID_NUMBER]{};
+
+  static LibXR::Mutex& GetMotorGroupMutex(uint8_t can_idx, uint8_t idx) {
+    static LibXR::Mutex instances[2][MOTOR_CTRL_ID_NUMBER]{};  // NOLINT
+    return instances[can_idx][idx];
+  }
 
   /**
    * @brief RMMotor 类的构造函数
@@ -176,10 +177,9 @@ class RMMotor : public LibXR::Application, public Motor {
     }
 
     if (can_index_ < 2) {
-      motor_tx_map_[can_index_][motor_index] |=
-          static_cast<uint8_t>(1U << motor_num);
       memset(motor_tx_buff_[can_index_][index_], 0,
              sizeof(motor_tx_buff_[can_index_][index_]));
+      motor_tx_state_[can_index_][index_] = 0U;
     } else {
       XR_LOG_WARN("invalid can bus name: %s", param_.can_bus_name);
     }
@@ -244,44 +244,14 @@ class RMMotor : public LibXR::Application, public Motor {
   LibXR::CAN* can_;
   LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};
 
-  class GroupLockGuard {
-   public:
-    explicit GroupLockGuard(uint8_t* lock) : lock_(lock) {
-      while (__atomic_test_and_set(lock_, __ATOMIC_ACQUIRE)) {
-      }
-    }
-
-    ~GroupLockGuard() { __atomic_clear(lock_, __ATOMIC_RELEASE); }
-
-   private:
-    uint8_t* lock_;
-  };
-
   /*---------------------工具函数---------------------------------------------*/
   /**
    * @brief 发送打包好的CAN控制报文
    * @details 从共享缓冲区拷贝数据到CAN包，通过CAN总线发送，并清零发送标志位。
    * @return bool 总是返回 true
    */
-  bool SendData() {
-    LibXR::CAN::ClassicPack tx_pack{};
-
-    tx_pack.id = config_param_.id_control;
-    tx_pack.type = LibXR::CAN::Type::STANDARD;
-    tx_pack.dlc = 8;
-
-    LibXR::Memory::FastCopy(tx_pack.data, motor_tx_buff_[can_index_][index_],
-                            sizeof(tx_pack.data));
-
-    can_->AddMessage(tx_pack);
-
-    motor_tx_flag_[can_index_][index_] = 0;
-    motor_tx_start_time_ms_[can_index_][index_] = 0U;
-
-    memset(motor_tx_buff_[can_index_][index_], 0,
-           sizeof(motor_tx_buff_[can_index_][index_]));
-
-    return true;
+  bool SendData(const LibXR::CAN::ClassicPack& tx_pack) {
+    return can_->AddMessage(tx_pack) == ErrorCode::OK;
   }
 
   /**
@@ -343,36 +313,33 @@ class RMMotor : public LibXR::Application, public Motor {
       return;
     }
 
-    GroupLockGuard guard(&motor_group_lock_[can_index_][index_]);
-    uint8_t& tx_flag = motor_tx_flag_[can_index_][index_];
-    const uint8_t TX_MAP = motor_tx_map_[can_index_][index_];
+    bool should_send = false;
+    LibXR::CAN::ClassicPack tx_pack{};
 
-    if (TX_MAP == 0) {
-      return;
+    {
+      LibXR::Mutex::LockGuard guard(GetMotorGroupMutex(can_index_, index_));
+
+      motor_tx_buff_[can_index_][index_][2 * num_] =
+          static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
+      motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
+          static_cast<uint8_t>(ctrl_cmd & 0xFF);
+      motor_tx_state_[can_index_][index_] = 1U;
+
+      if (motor_tx_state_[can_index_][index_] != 0U) {
+        tx_pack.id = config_param_.id_control;
+        tx_pack.type = LibXR::CAN::Type::STANDARD;
+        tx_pack.dlc = 8;
+        LibXR::Memory::FastCopy(tx_pack.data,
+                                motor_tx_buff_[can_index_][index_],
+                                sizeof(tx_pack.data));
+
+        motor_tx_state_[can_index_][index_] = 0U;
+        should_send = true;
+      }
     }
 
-    if (tx_flag == 0U) {
-      motor_tx_start_time_ms_[can_index_][index_] =
-          static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
-    }
-
-    motor_tx_buff_[can_index_][index_][2 * num_] =
-        static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
-    motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
-        static_cast<uint8_t>(ctrl_cmd & 0xFF);
-    tx_flag |= static_cast<uint8_t>(1U << num_);
-
-    const bool ALL_READY = (((~tx_flag) & TX_MAP) == 0U);
-    const uint32_t NOW_MS =
-        static_cast<uint32_t>(LibXR::Timebase::GetMilliseconds());
-    const bool TIMEOUT =
-        !ALL_READY &&
-        (static_cast<uint32_t>(NOW_MS -
-                               motor_tx_start_time_ms_[can_index_][index_]) >=
-         MOTOR_TX_TIMEOUT_MS);
-
-    if (ALL_READY || TIMEOUT) {
-      SendData();
+    if (should_send) {
+      SendData(tx_pack);
     }
   }
 
