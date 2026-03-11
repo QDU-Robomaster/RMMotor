@@ -92,7 +92,8 @@ class RMMotor : public LibXR::Application, public Motor {
   };
 
   static inline uint8_t motor_tx_buff_[2][MOTOR_CTRL_ID_NUMBER][8]{};
-  static inline uint8_t motor_tx_state_[2][MOTOR_CTRL_ID_NUMBER]{};
+  static inline uint8_t motor_tx_pending_mask_[2][MOTOR_CTRL_ID_NUMBER]{};
+  static inline uint8_t motor_group_mask_[2][MOTOR_CTRL_ID_NUMBER]{};
 
   static LibXR::Mutex& GetMotorGroupMutex(uint8_t can_idx, uint8_t idx) {
     static LibXR::Mutex instances[2][MOTOR_CTRL_ID_NUMBER]{};  // NOLINT
@@ -177,9 +178,14 @@ class RMMotor : public LibXR::Application, public Motor {
     }
 
     if (can_index_ < 2) {
-      memset(motor_tx_buff_[can_index_][index_], 0,
-             sizeof(motor_tx_buff_[can_index_][index_]));
-      motor_tx_state_[can_index_][index_] = 0U;
+      auto& group_mutex = GetMotorGroupMutex(can_index_, index_);
+      LibXR::Mutex::LockGuard guard(group_mutex);
+      if (motor_group_mask_[can_index_][index_] == 0U) {
+        memset(motor_tx_buff_[can_index_][index_], 0,
+               sizeof(motor_tx_buff_[can_index_][index_]));
+      }
+      motor_tx_pending_mask_[can_index_][index_] = 0U;
+      motor_group_mask_[can_index_][index_] |= static_cast<uint8_t>(1U << num_);
     } else {
       XR_LOG_WARN("invalid can bus name: %s", param_.can_bus_name);
     }
@@ -313,6 +319,7 @@ class RMMotor : public LibXR::Application, public Motor {
       return;
     }
 
+    const uint8_t motor_bit = static_cast<uint8_t>(1U << num_);
     bool should_send = false;
     LibXR::CAN::ClassicPack tx_pack{};
 
@@ -323,9 +330,12 @@ class RMMotor : public LibXR::Application, public Motor {
           static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
       motor_tx_buff_[can_index_][index_][2 * num_ + 1] =
           static_cast<uint8_t>(ctrl_cmd & 0xFF);
-      motor_tx_state_[can_index_][index_] = 1U;
+      motor_tx_pending_mask_[can_index_][index_] |= motor_bit;
 
-      if (motor_tx_state_[can_index_][index_] != 0U) {
+      // Send one frame after every active motor in the control group updated.
+      if (motor_group_mask_[can_index_][index_] != 0U &&
+          motor_tx_pending_mask_[can_index_][index_] ==
+              motor_group_mask_[can_index_][index_]) {
         tx_pack.id = config_param_.id_control;
         tx_pack.type = LibXR::CAN::Type::STANDARD;
         tx_pack.dlc = 8;
@@ -333,7 +343,7 @@ class RMMotor : public LibXR::Application, public Motor {
                                 motor_tx_buff_[can_index_][index_],
                                 sizeof(tx_pack.data));
 
-        motor_tx_state_[can_index_][index_] = 0U;
+        motor_tx_pending_mask_[can_index_][index_] = 0U;
         should_send = true;
       }
     }
