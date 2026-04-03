@@ -256,7 +256,7 @@ class RMMotor : public LibXR::Application, public Motor {
    *
    * @return
    * - `ErrorCode::OK`：本次至少收到并解码了一帧反馈
-   * - `ErrorCode::NO_RESPONSE`：本次没有可处理的反馈
+   * - `ErrorCode::NO_RESPONSE`：连续无反馈次数超过阈值
    */
   ErrorCode Update() override {
     LibXR::CAN::ClassicPack pack;
@@ -265,7 +265,18 @@ class RMMotor : public LibXR::Application, public Motor {
       Decode(pack);
       get_feedback = true;
     }
-    return get_feedback ? ErrorCode::OK : ErrorCode::NO_RESPONSE;
+
+    if (get_feedback) {
+      no_response_count_ = 0U;
+      return ErrorCode::OK;
+    }
+
+    if (no_response_count_ <= NO_RESPONSE_THRESHOLD) {
+      ++no_response_count_;
+    }
+
+    return no_response_count_ > NO_RESPONSE_THRESHOLD ? ErrorCode::NO_RESPONSE
+                                                      : ErrorCode::OK;
   }
 
   /**
@@ -313,6 +324,8 @@ class RMMotor : public LibXR::Application, public Motor {
   void OnMonitor() override {}
 
  private:
+  static constexpr uint16_t NO_RESPONSE_THRESHOLD = 255U;
+
   uint8_t index_{};  ///< 控制组索引，对应不同 control ID
   uint8_t num_{};    ///< 当前电机在 8 字节控制帧中的槽位编号
 
@@ -321,6 +334,7 @@ class RMMotor : public LibXR::Application, public Motor {
   Param param_;                  ///< 构造参数副本
   ConfigParam config_param_{};   ///< 反馈/控制 ID 配置
   Motor::Feedback feedback_{};   ///< 最近一次解码得到的反馈
+  uint16_t no_response_count_{}; ///< 连续无反馈计数
 
   LibXR::CAN* can_;                                    ///< 当前实例所属 CAN 总线
   BusState* bus_state_{};                              ///< 当前实例所属总线共享状态
