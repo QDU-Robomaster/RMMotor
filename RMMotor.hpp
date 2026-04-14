@@ -90,10 +90,11 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 模块构造参数
    */
   struct Param {
-    Model model;              ///< 电机型号
-    bool reverse;             ///< 是否反向解释反馈并反向输出控制
-    uint16_t feedback_id;     ///< 电机反馈 CAN ID
-    const char* can_bus_name; ///< CAN 硬件别名，用于从 HardwareContainer 查找总线
+    Model model;           ///< 电机型号
+    bool reverse;          ///< 是否反向解释反馈并反向输出控制
+    uint16_t feedback_id;  ///< 电机反馈 CAN ID
+    const char*
+        can_bus_name;  ///< CAN 硬件别名，用于从 HardwareContainer 查找总线
   };
 
   /**
@@ -126,7 +127,7 @@ class RMMotor : public LibXR::Application, public Motor {
    */
   struct BusState {
     LibXR::CAN* can{};                               ///< 对应的 CAN 对象
-    MotorGroupState groups[MOTOR_CTRL_ID_NUMBER]{}; ///< 4 个控制 ID 组的状态
+    MotorGroupState groups[MOTOR_CTRL_ID_NUMBER]{};  ///< 4 个控制 ID 组的状态
     BusState* next{};                                ///< 注册表单链表下一项
   };
 
@@ -331,17 +332,18 @@ class RMMotor : public LibXR::Application, public Motor {
 
   float reverse_flag_ = 1.0f;  ///< 方向系数，正向为 1，反向为 -1
 
-  Param param_;                  ///< 构造参数副本
-  ConfigParam config_param_{};   ///< 反馈/控制 ID 配置
-  Motor::Feedback feedback_{};   ///< 最近一次解码得到的反馈
-  uint16_t no_response_count_{}; ///< 连续无反馈计数
+  Param param_;                   ///< 构造参数副本
+  ConfigParam config_param_{};    ///< 反馈/控制 ID 配置
+  Motor::Feedback feedback_{};    ///< 最近一次解码得到的反馈
+  uint16_t no_response_count_{};  ///< 连续无反馈计数
 
-  LibXR::CAN* can_;                                    ///< 当前实例所属 CAN 总线
-  BusState* bus_state_{};                              ///< 当前实例所属总线共享状态
+  LibXR::CAN* can_;        ///< 当前实例所属 CAN 总线
+  BusState* bus_state_{};  ///< 当前实例所属总线共享状态
   LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};  ///< 接收队列
 
-  static inline LibXR::Mutex bus_state_registry_mutex_{};  ///< 总线状态注册表互斥锁
-  static inline BusState* bus_state_registry_head_{};      ///< 总线状态注册表头指针
+  static inline LibXR::Mutex
+      bus_state_registry_mutex_{};                     ///< 总线状态注册表互斥锁
+  static inline BusState* bus_state_registry_head_{};  ///< 总线状态注册表头指针
 
   /**
    * @brief 发送已经打包完成的 CAN 帧
