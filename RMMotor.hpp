@@ -259,25 +259,26 @@ class RMMotor : public LibXR::Application, public Motor {
    * - `ErrorCode::OK`：本次至少收到并解码了一帧反馈
    * - `ErrorCode::NO_RESPONSE`：连续无反馈次数超过阈值
    */
-  ErrorCode Update() override {
+  LibXR::ErrorCode Update() override {
     LibXR::CAN::ClassicPack pack;
     bool get_feedback = false;
-    while (recv_queue_.Pop(pack) == ErrorCode::OK) {
+    while (recv_queue_.Pop(pack) == LibXR::ErrorCode::OK) {
       Decode(pack);
       get_feedback = true;
     }
 
     if (get_feedback) {
       no_response_count_ = 0U;
-      return ErrorCode::OK;
+      return LibXR::ErrorCode::OK;
     }
 
     if (no_response_count_ <= NO_RESPONSE_THRESHOLD) {
       ++no_response_count_;
     }
 
-    return no_response_count_ > NO_RESPONSE_THRESHOLD ? ErrorCode::NO_RESPONSE
-                                                      : ErrorCode::OK;
+    return no_response_count_ > NO_RESPONSE_THRESHOLD
+               ? LibXR::ErrorCode::NO_RESPONSE
+               : LibXR::ErrorCode::OK;
   }
 
   /**
@@ -351,7 +352,7 @@ class RMMotor : public LibXR::Application, public Motor {
    * @return `true` 表示成功加入底层 CAN 发送队列
    */
   bool SendData(const LibXR::CAN::ClassicPack& tx_pack) {
-    return can_->AddMessage(tx_pack) == ErrorCode::OK;
+    return can_->AddMessage(tx_pack) == LibXR::ErrorCode::OK;
   }
 
   /**
@@ -375,7 +376,7 @@ class RMMotor : public LibXR::Application, public Motor {
   static void RxCallback(bool in_isr, RMMotor* self,
                          const LibXR::CAN::ClassicPack& pack) {
     UNUSED(in_isr);
-    while (self->recv_queue_.Push(pack) != ErrorCode::OK) {
+    while (self->recv_queue_.Push(pack) != LibXR::ErrorCode::OK) {
       self->recv_queue_.Pop();
     }
   }
@@ -395,16 +396,17 @@ class RMMotor : public LibXR::Application, public Motor {
 
     if (param_.reverse) {
       feedback_.position = -static_cast<float>(raw_angle) / MOTOR_ENC_RES *
-                           static_cast<float>(M_2PI);
+                           static_cast<float>(LibXR::TWO_PI);
       feedback_.velocity = static_cast<float>(-raw_velocity);
     } else {
       feedback_.position = static_cast<float>(raw_angle) / MOTOR_ENC_RES *
-                           static_cast<float>(M_2PI);
+                           static_cast<float>(LibXR::TWO_PI);
       feedback_.velocity = static_cast<float>(raw_velocity);
     }
 
     feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
-    feedback_.omega = feedback_.velocity * (static_cast<float>(M_2PI) / 60.0f);
+    feedback_.omega =
+        feedback_.velocity * (static_cast<float>(LibXR::TWO_PI) / 60.0f);
     feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
                        GetCurrentMAX() / MOTOR_CUR_RES;
     feedback_.temp = static_cast<float>(raw_temp);
