@@ -461,7 +461,8 @@ class RMMotor : public LibXR::Application, public Motor {
   void TorqueControl(float torque, float reduction_ratio) {
     if (feedback_.temp > 75.0f) {
       torque = 0.0f;
-      XR_LOG_WARN("motor %d high temperature detected", param_.feedback_id);
+      XR_LOG_WARN("motor %u high temperature detected",
+                  static_cast<unsigned>(param_.feedback_id));
     }
 
     float output =
@@ -480,7 +481,8 @@ class RMMotor : public LibXR::Application, public Motor {
   void CurrentControl(float out) {
     if (feedback_.temp > 75.0f) {
       out = 0.0f;
-      XR_LOG_WARN("motor %d high temperature detected", param_.feedback_id);
+      XR_LOG_WARN("motor %u high temperature detected",
+                  static_cast<unsigned>(param_.feedback_id));
     }
 
     out = std::clamp(out, -1.0f, 1.0f);
