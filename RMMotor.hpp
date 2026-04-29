@@ -453,6 +453,9 @@ class RMMotor : public LibXR::Application, public Motor {
     }
   }
 
+ public:
+  float GetOmega() const { return feedback_.omega; }
+
   /**
    * @brief 力矩控制
    * @param torque 目标输出力矩
@@ -474,6 +477,7 @@ class RMMotor : public LibXR::Application, public Motor {
     PackAndSend(ctrl_cmd);
   }
 
+ private:
   /**
    * @brief 电流控制
    * @param out 归一化输出，范围通常为 [-1.0, 1.0]
