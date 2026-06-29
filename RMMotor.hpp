@@ -340,7 +340,7 @@ class RMMotor : public LibXR::Application, public Motor {
 
   LibXR::CAN* can_;        ///< 当前实例所属 CAN 总线
   BusState* bus_state_{};  ///< 当前实例所属总线共享状态
-  LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};  ///< 接收队列
+  LibXR::MPMCQueue<LibXR::CAN::ClassicPack> recv_queue_{1};  ///< 接收队列
 
   static inline LibXR::Mutex
       bus_state_registry_mutex_{};                     ///< 总线状态注册表互斥锁
