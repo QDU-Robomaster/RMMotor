@@ -12,7 +12,8 @@ constructor_args:
 template_args: []
 required_hardware:
   - can
-depends: []
+depends:
+  - qdu-future/Motor
 === END MANIFEST === */
 // clang-format on
 
