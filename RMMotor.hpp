@@ -3,16 +3,9 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: RoboMaster motor
-constructor_args:
-  - param:
-      model: RMMotor::Model::MOTOR_M3508
-      reverse: false
-      feedback_id: 0x201
-      can_bus_name: can1
-template_args: []
-required_hardware:
-  - can
-depends: []
+depends:
+- id: QDU-Robomaster/Motor
+  ref: same-or-dev
 === END MANIFEST === */
 // clang-format on
 
@@ -20,9 +13,9 @@ depends: []
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 #include "Motor.hpp"
-#include "app_framework.hpp"
 #include "can.hpp"
 #include "cycle_value.hpp"
 #include "libxr_def.hpp"
@@ -74,12 +67,14 @@ depends: []
  *
  * 当前拼包语义为：组内所有已注册成员都在本轮更新过一次后，才触发一次发送。
  */
-class RMMotor : public LibXR::Application, public Motor {
+class RMMotor : public Motor
+{
  public:
   /**
    * @brief RoboMaster 电机型号
    */
-  enum class Model : uint8_t {
+  enum class Model : uint8_t
+  {
     MOTOR_NONE = 0,
     MOTOR_M2006,
     MOTOR_M3508,
@@ -89,18 +84,19 @@ class RMMotor : public LibXR::Application, public Motor {
   /**
    * @brief 模块构造参数
    */
-  struct Param {
+  struct Param
+  {
     Model model;           ///< 电机型号
     bool reverse;          ///< 是否反向解释反馈并反向输出控制
     uint16_t feedback_id;  ///< 电机反馈 CAN ID
-    const char*
-        can_bus_name;  ///< CAN 硬件别名，用于从 HardwareContainer 查找总线
+    LibXR::CAN& can_bus;   ///< 借用的 CAN 总线对象，必须覆盖电机生命周期
   };
 
   /**
    * @brief 由反馈 ID 推导出的控制配置
    */
-  struct ConfigParam {
+  struct ConfigParam
+  {
     uint32_t id_feedback;  ///< 反馈帧 ID
     uint32_t id_control;   ///< 控制帧 ID
   };
@@ -111,7 +107,8 @@ class RMMotor : public LibXR::Application, public Motor {
    * @details
    * 一个控制组对应一个 8 字节发送帧，最多容纳 4 个电机，每个电机占 2 字节槽位。
    */
-  struct MotorGroupState {
+  struct MotorGroupState
+  {
     uint8_t tx_buff[8]{};    ///< 当前拼包缓存
     uint8_t pending_mask{};  ///< 本轮已写入命令的成员位图
     uint8_t group_mask{};    ///< 当前组内已注册成员位图
@@ -125,7 +122,8 @@ class RMMotor : public LibXR::Application, public Motor {
    * 以 `LibXR::CAN*` 作为总线身份，而不是以字符串别名作为身份。
    * 同一个 CAN 对象的多个 alias 会落到同一个 BusState。
    */
-  struct BusState {
+  struct BusState
+  {
     LibXR::CAN* can{};                               ///< 对应的 CAN 对象
     MotorGroupState groups[MOTOR_CTRL_ID_NUMBER]{};  ///< 4 个控制 ID 组的状态
     BusState* next{};                                ///< 注册表单链表下一项
@@ -134,41 +132,43 @@ class RMMotor : public LibXR::Application, public Motor {
   /**
    * @brief 构造 RoboMaster 电机实例
    *
-   * @param hw 硬件容器
-   * @param app 应用管理器
    * @param param 模块构造参数
    *
    * @details
    * 构造时会完成：
-   * - 通过 `can_bus_name` 查找对应的 `LibXR::CAN`
+   * - 直接使用 `can_bus` 引用的 `LibXR::CAN`
    * - 根据电机型号与反馈 ID 推导控制组和槽位编号
    * - 为所在 `(can, control_id)` 组注册成员位
    * - 注册反馈帧接收回调
    */
-  RMMotor(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
-          const Param& param)
-      : param_(param),
-        can_(hw.template FindOrExit<LibXR::CAN>({param_.can_bus_name})) {
-    UNUSED(app);
+  RMMotor(const Param& param) : param_(param), can_(std::addressof(param_.can_bus))
+  {
     reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
 
-    switch (param_.model) {
+    switch (param_.model)
+    {
       case Model::MOTOR_M2006:
       case Model::MOTOR_M3508:
-        if (param_.feedback_id >= 0x201 && param_.feedback_id <= 0x204) {
+        if (param_.feedback_id >= 0x201 && param_.feedback_id <= 0x204)
+        {
           config_param_.id_control = M3508_M2006_CTRL_ID_BASE;
           config_param_.id_feedback = param_.feedback_id;
-        } else if (param_.feedback_id >= 0x205 && param_.feedback_id <= 0x208) {
+        }
+        else if (param_.feedback_id >= 0x205 && param_.feedback_id <= 0x208)
+        {
           config_param_.id_control = M3508_M2006_CTRL_ID_EXTAND;
           config_param_.id_feedback = param_.feedback_id;
         }
         break;
 
       case Model::MOTOR_GM6020:
-        if (param_.feedback_id >= 0x205 && param_.feedback_id <= 0x208) {
+        if (param_.feedback_id >= 0x205 && param_.feedback_id <= 0x208)
+        {
           config_param_.id_control = GM6020_CTRL_ID_BASE;
           config_param_.id_feedback = param_.feedback_id;
-        } else if (param_.feedback_id >= 0x209 && param_.feedback_id <= 0x20B) {
+        }
+        else if (param_.feedback_id >= 0x209 && param_.feedback_id <= 0x20B)
+        {
           config_param_.id_control = GM6020_CTRL_ID_EXTAND;
           config_param_.id_feedback = param_.feedback_id;
         }
@@ -183,7 +183,8 @@ class RMMotor : public LibXR::Application, public Motor {
     uint8_t motor_num = 0;
     uint8_t motor_index = 0;
 
-    switch (config_param_.id_control) {
+    switch (config_param_.id_control)
+    {
       case M3508_M2006_CTRL_ID_BASE:
         motor_index = 0;
         motor_num = config_param_.id_feedback - M3508_M2006_FB_ID_BASE;
@@ -213,7 +214,8 @@ class RMMotor : public LibXR::Application, public Motor {
     {
       auto& group_state = GetMotorGroupState();
       LibXR::Mutex::LockGuard guard(group_state.mutex);
-      if (group_state.group_mask == 0U) {
+      if (group_state.group_mask == 0U)
+      {
         memset(group_state.tx_buff, 0, sizeof(group_state.tx_buff));
       }
       group_state.pending_mask = 0U;
@@ -221,10 +223,8 @@ class RMMotor : public LibXR::Application, public Motor {
     }
 
     auto rx_callback = LibXR::CAN::Callback::Create(
-        [](bool in_isr, RMMotor* self, const LibXR::CAN::ClassicPack& pack) {
-          RxCallback(in_isr, self, pack);
-        },
-        this);
+        [](bool in_isr, RMMotor* self, const LibXR::CAN::ClassicPack& pack)
+        { RxCallback(in_isr, self, pack); }, this);
 
     can_->Register(rx_callback, LibXR::CAN::Type::STANDARD,
                    LibXR::CAN::FilterMode::ID_RANGE, config_param_.id_feedback,
@@ -259,26 +259,29 @@ class RMMotor : public LibXR::Application, public Motor {
    * - `ErrorCode::OK`：本次至少收到并解码了一帧反馈
    * - `ErrorCode::NO_RESPONSE`：连续无反馈次数超过阈值
    */
-  LibXR::ErrorCode Update() override {
+  LibXR::ErrorCode Update() override
+  {
     LibXR::CAN::ClassicPack pack;
     bool get_feedback = false;
-    while (recv_queue_.Pop(pack) == LibXR::ErrorCode::OK) {
+    while (recv_queue_.Pop(pack) == LibXR::ErrorCode::OK)
+    {
       Decode(pack);
       get_feedback = true;
     }
 
-    if (get_feedback) {
+    if (get_feedback)
+    {
       no_response_count_ = 0U;
       return LibXR::ErrorCode::OK;
     }
 
-    if (no_response_count_ <= NO_RESPONSE_THRESHOLD) {
+    if (no_response_count_ <= NO_RESPONSE_THRESHOLD)
+    {
       ++no_response_count_;
     }
 
-    return no_response_count_ > NO_RESPONSE_THRESHOLD
-               ? LibXR::ErrorCode::NO_RESPONSE
-               : LibXR::ErrorCode::OK;
+    return no_response_count_ > NO_RESPONSE_THRESHOLD ? LibXR::ErrorCode::NO_RESPONSE
+                                                      : LibXR::ErrorCode::OK;
   }
 
   /**
@@ -291,8 +294,10 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 下发控制命令
    * @param cmd 电机控制命令
    */
-  void Control(const MotorCmd& cmd) override {
-    switch (cmd.mode) {
+  void Control(const MotorCmd& cmd) override
+  {
+    switch (cmd.mode)
+    {
       case ControlMode::MODE_TORQUE:
         TorqueControl(cmd.torque, cmd.reduction_ratio);
         break;
@@ -323,7 +328,7 @@ class RMMotor : public LibXR::Application, public Motor {
    *
    * @note 当前实现未使用该钩子。
    */
-  void OnMonitor() override {}
+  void OnMonitor() {}
 
  private:
   static constexpr uint16_t NO_RESPONSE_THRESHOLD = 255U;
@@ -338,20 +343,20 @@ class RMMotor : public LibXR::Application, public Motor {
   Motor::Feedback feedback_{};    ///< 最近一次解码得到的反馈
   uint16_t no_response_count_{};  ///< 连续无反馈计数
 
-  LibXR::CAN* can_;        ///< 当前实例所属 CAN 总线
-  BusState* bus_state_{};  ///< 当前实例所属总线共享状态
-  LibXR::LockFreeQueue<LibXR::CAN::ClassicPack> recv_queue_{1};  ///< 接收队列
+  LibXR::CAN* can_;                                          ///< 当前实例所属 CAN 总线
+  BusState* bus_state_{};                                    ///< 当前实例所属总线共享状态
+  LibXR::MPMCQueue<LibXR::CAN::ClassicPack> recv_queue_{1};  ///< 接收队列
 
-  static inline LibXR::Mutex
-      bus_state_registry_mutex_{};                     ///< 总线状态注册表互斥锁
-  static inline BusState* bus_state_registry_head_{};  ///< 总线状态注册表头指针
+  static inline LibXR::Mutex bus_state_registry_mutex_{};  ///< 总线状态注册表互斥锁
+  static inline BusState* bus_state_registry_head_{};      ///< 总线状态注册表头指针
 
   /**
    * @brief 发送已经打包完成的 CAN 帧
    * @param tx_pack 待发送的控制帧
    * @return `true` 表示成功加入底层 CAN 发送队列
    */
-  bool SendData(const LibXR::CAN::ClassicPack& tx_pack) {
+  bool SendData(const LibXR::CAN::ClassicPack& tx_pack)
+  {
     return can_->AddMessage(tx_pack) == LibXR::ErrorCode::OK;
   }
 
@@ -359,7 +364,8 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 获取当前实例所在控制组的共享状态
    * @return 控制组状态引用
    */
-  MotorGroupState& GetMotorGroupState() {
+  MotorGroupState& GetMotorGroupState()
+  {
     ASSERT(bus_state_ != nullptr);
     return bus_state_->groups[index_];
   }
@@ -373,10 +379,11 @@ class RMMotor : public LibXR::Application, public Motor {
    * @details
    * 为了始终保留最新反馈，若队列已满会先弹出最旧数据，再压入最新数据。
    */
-  static void RxCallback(bool in_isr, RMMotor* self,
-                         const LibXR::CAN::ClassicPack& pack) {
+  static void RxCallback(bool in_isr, RMMotor* self, const LibXR::CAN::ClassicPack& pack)
+  {
     UNUSED(in_isr);
-    while (self->recv_queue_.Push(pack) != LibXR::ErrorCode::OK) {
+    while (self->recv_queue_.Push(pack) != LibXR::ErrorCode::OK)
+    {
       self->recv_queue_.Pop();
     }
   }
@@ -385,30 +392,30 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 解码 RoboMaster 电机反馈帧
    * @param pack 反馈 CAN 帧
    */
-  void Decode(LibXR::CAN::ClassicPack& pack) {
-    uint16_t raw_angle =
-        static_cast<uint16_t>((pack.data[0] << 8) | pack.data[1]);
-    int16_t raw_velocity =
-        static_cast<int16_t>((pack.data[2] << 8) | pack.data[3]);
-    int16_t raw_current =
-        static_cast<int16_t>((pack.data[4] << 8) | pack.data[5]);
+  void Decode(LibXR::CAN::ClassicPack& pack)
+  {
+    uint16_t raw_angle = static_cast<uint16_t>((pack.data[0] << 8) | pack.data[1]);
+    int16_t raw_velocity = static_cast<int16_t>((pack.data[2] << 8) | pack.data[3]);
+    int16_t raw_current = static_cast<int16_t>((pack.data[4] << 8) | pack.data[5]);
     uint8_t raw_temp = pack.data[6];
 
-    if (param_.reverse) {
+    if (param_.reverse)
+    {
       feedback_.position = -static_cast<float>(raw_angle) / MOTOR_ENC_RES *
                            static_cast<float>(LibXR::TWO_PI);
       feedback_.velocity = static_cast<float>(-raw_velocity);
-    } else {
+    }
+    else
+    {
       feedback_.position = static_cast<float>(raw_angle) / MOTOR_ENC_RES *
                            static_cast<float>(LibXR::TWO_PI);
       feedback_.velocity = static_cast<float>(raw_velocity);
     }
 
     feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
-    feedback_.omega =
-        feedback_.velocity * (static_cast<float>(LibXR::TWO_PI) / 60.0f);
-    feedback_.torque = static_cast<float>(raw_current) * KGetTorque() *
-                       GetCurrentMAX() / MOTOR_CUR_RES;
+    feedback_.omega = feedback_.velocity * (static_cast<float>(LibXR::TWO_PI) / 60.0f);
+    feedback_.torque =
+        static_cast<float>(raw_current) * KGetTorque() * GetCurrentMAX() / MOTOR_CUR_RES;
     feedback_.temp = static_cast<float>(raw_temp);
     feedback_.state = 1;
   }
@@ -421,7 +428,8 @@ class RMMotor : public LibXR::Application, public Motor {
    * 槽位映射规则为 `2 * num_` 和 `2 * num_ + 1`。
    * 仅当 `pending_mask == group_mask` 时，才会发送当前组的 8 字节控制帧。
    */
-  void PackAndSend(int16_t ctrl_cmd) {
+  void PackAndSend(int16_t ctrl_cmd)
+  {
     const uint8_t motor_bit = static_cast<uint8_t>(1U << num_);
     bool should_send = false;
     LibXR::CAN::ClassicPack tx_pack{};
@@ -430,25 +438,25 @@ class RMMotor : public LibXR::Application, public Motor {
       auto& group_state = GetMotorGroupState();
       LibXR::Mutex::LockGuard guard(group_state.mutex);
 
-      group_state.tx_buff[2 * num_] =
-          static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
+      group_state.tx_buff[2 * num_] = static_cast<uint8_t>((ctrl_cmd >> 8) & 0xFF);
       group_state.tx_buff[2 * num_ + 1] = static_cast<uint8_t>(ctrl_cmd & 0xFF);
       group_state.pending_mask |= motor_bit;
 
       if (group_state.group_mask != 0U &&
-          group_state.pending_mask == group_state.group_mask) {
+          group_state.pending_mask == group_state.group_mask)
+      {
         tx_pack.id = config_param_.id_control;
         tx_pack.type = LibXR::CAN::Type::STANDARD;
         tx_pack.dlc = 8;
-        LibXR::Memory::FastCopy(tx_pack.data, group_state.tx_buff,
-                                sizeof(tx_pack.data));
+        LibXR::Memory::FastCopy(tx_pack.data, group_state.tx_buff, sizeof(tx_pack.data));
 
         group_state.pending_mask = 0U;
         should_send = true;
       }
     }
 
-    if (should_send) {
+    if (should_send)
+    {
       SendData(tx_pack);
     }
   }
@@ -461,17 +469,18 @@ class RMMotor : public LibXR::Application, public Motor {
    * @param torque 目标输出力矩
    * @param reduction_ratio 减速比
    */
-  void TorqueControl(float torque, float reduction_ratio) {
-    if (feedback_.temp > 75.0f) {
+  void TorqueControl(float torque, float reduction_ratio)
+  {
+    if (feedback_.temp > 75.0f)
+    {
       torque = 0.0f;
       XR_LOG_WARN("motor %u high temperature detected",
                   static_cast<unsigned>(param_.feedback_id));
     }
 
-    float output =
-        std::clamp(torque / reduction_ratio / KGetTorque() / GetCurrentMAX(),
-                   -1.0f, 1.0f) *
-        GetLSB() * reverse_flag_;
+    float output = std::clamp(torque / reduction_ratio / KGetTorque() / GetCurrentMAX(),
+                              -1.0f, 1.0f) *
+                   GetLSB() * reverse_flag_;
 
     int16_t ctrl_cmd = static_cast<int16_t>(output);
     PackAndSend(ctrl_cmd);
@@ -482,16 +491,17 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 电流控制
    * @param out 归一化输出，范围通常为 [-1.0, 1.0]
    */
-  void CurrentControl(float out) {
-    if (feedback_.temp > 75.0f) {
+  void CurrentControl(float out)
+  {
+    if (feedback_.temp > 75.0f)
+    {
       out = 0.0f;
       XR_LOG_WARN("motor %u high temperature detected",
                   static_cast<unsigned>(param_.feedback_id));
     }
 
     out = std::clamp(out, -1.0f, 1.0f);
-    float output =
-        std::clamp(out * GetLSB(), -GetLSB(), GetLSB()) * reverse_flag_;
+    float output = std::clamp(out * GetLSB(), -GetLSB(), GetLSB()) * reverse_flag_;
 
     int16_t ctrl_cmd = static_cast<int16_t>(output);
     PackAndSend(ctrl_cmd);
@@ -501,8 +511,10 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 获取电机力矩常数
    * @return 对应型号的力矩常数
    */
-  float KGetTorque() {
-    switch (param_.model) {
+  float KGetTorque()
+  {
+    switch (param_.model)
+    {
       case Model::MOTOR_M2006:
         return 0.005f;
       case Model::MOTOR_M3508:
@@ -518,8 +530,10 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 获取电机最大电流
    * @return 对应型号的最大绝对电流
    */
-  float GetCurrentMAX() {
-    switch (param_.model) {
+  float GetCurrentMAX()
+  {
+    switch (param_.model)
+    {
       case Model::MOTOR_M2006:
         return M2006_MAX_ABS_CUR;
       case Model::MOTOR_M3508:
@@ -535,8 +549,10 @@ class RMMotor : public LibXR::Application, public Motor {
    * @brief 获取控制量 LSB 上限
    * @return 对应型号的控制量满量程
    */
-  float GetLSB() {
-    switch (param_.model) {
+  float GetLSB()
+  {
+    switch (param_.model)
+    {
       case Model::MOTOR_M2006:
         return M2006_MAX_ABS_LSB;
       case Model::MOTOR_M3508:
@@ -552,10 +568,13 @@ class RMMotor : public LibXR::Application, public Motor {
    * @param can CAN 对象指针
    * @return 找到则返回对应状态指针，否则返回 `nullptr`
    */
-  static BusState* FindBusState(LibXR::CAN* can) {
+  static BusState* FindBusState(LibXR::CAN* can)
+  {
     BusState* state = bus_state_registry_head_;
-    while (state != nullptr) {
-      if (state->can == can) {
+    while (state != nullptr)
+    {
+      if (state->can == can)
+      {
         return state;
       }
       state = state->next;
@@ -569,15 +588,17 @@ class RMMotor : public LibXR::Application, public Motor {
    * @return 总线状态引用
    *
    * @details
-   * 该函数以 `LibXR::CAN*` 作为总线身份标识，而不是以 `can_bus_name` 字符串
+   * 该函数以 `LibXR::CAN*` 作为总线身份标识，而不是以 `can_bus` 字符串
    * 作为标识。这样同一 CAN 对象的多个 alias 会共享同一个拼包状态。
    *
    * 注册表采用单链表保存，创建策略为只增不删，符合本项目初始化阶段分配、
    * 运行期不释放的使用方式。
    */
-  static BusState& GetOrCreateBusState(LibXR::CAN* can) {
+  static BusState& GetOrCreateBusState(LibXR::CAN* can)
+  {
     LibXR::Mutex::LockGuard guard(bus_state_registry_mutex_);
-    if (BusState* state = FindBusState(can); state != nullptr) {
+    if (BusState* state = FindBusState(can); state != nullptr)
+    {
       return *state;
     }
     auto* state = new BusState{};
