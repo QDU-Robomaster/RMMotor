@@ -89,7 +89,6 @@ class RMMotor : public Motor
     Model model;           ///< 电机型号
     bool reverse;          ///< 是否反向解释反馈并反向输出控制
     uint16_t feedback_id;  ///< 电机反馈 CAN ID
-    LibXR::CAN& can_bus;   ///< 借用的 CAN 总线对象，必须覆盖电机生命周期
   };
 
   /**
@@ -141,7 +140,10 @@ class RMMotor : public Motor
    * - 为所在 `(can, control_id)` 组注册成员位
    * - 注册反馈帧接收回调
    */
-  RMMotor(const Param& param) : param_(param), can_(std::addressof(param_.can_bus))
+  RMMotor(
+      LibXR::CAN& can_bus,
+      const Param& param = {
+      .model = RMMotor::Model::MOTOR_M3508, .reverse = false, .feedback_id = 0x201}) : param_(param), can_(std::addressof(can_bus))
   {
     reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
 
