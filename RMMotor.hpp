@@ -325,13 +325,6 @@ class RMMotor : public Motor
    */
   void SaveZeroPoint() override { return; }
 
-  /**
-   * @brief 周期监控回调
-   *
-   * @note 当前实现未使用该钩子。
-   */
-  void OnMonitor() {}
-
  private:
   static constexpr uint16_t NO_RESPONSE_THRESHOLD = 255U;
 
