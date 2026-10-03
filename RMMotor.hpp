@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: RoboMaster motor
+module_description: RoboMaster 电机驱动模块（M2006 / M3508 / GM6020）：CAN 收发、反馈解码与 Motor 接口 / RoboMaster motor driver Module (M2006 / M3508 / GM6020) with CAN transfer, feedback decoding and the Motor interface
 depends:
 - id: QDU-Robomaster/Motor
   ref: same-or-dev
@@ -25,18 +25,15 @@ depends:
 #include "thread.hpp"
 #include "timebase.hpp"
 
-/* RMMotor id */
-/* id     feedback id     control id */
-/* 1-4    0x205 to 0x208  0x1fe */
-/* 5-6    0x209 to 0x20B  0x2fe */
+// GM6020: feedback ID 0x205-0x208 -> control ID 0x1FE, 0x209-0x20B -> control ID 0x2FE.
+// GM6020：反馈 ID 0x205-0x208 对应控制 ID 0x1FE，0x209-0x20B 对应控制 ID 0x2FE。
 #define GM6020_FB_ID_BASE (0x205)
 #define GM6020_FB_ID_EXTAND (0x209)
 #define GM6020_CTRL_ID_BASE (0x1fe)
 #define GM6020_CTRL_ID_EXTAND (0x2fe)
 
-/* id     feedback id     control id */
-/* 1-4    0x201 to 0x204  0x200 */
-/* 5-6    0x205 to 0x208  0x1ff */
+// M3508 / M2006: feedback ID 0x201-0x204 -> control ID 0x200, 0x205-0x208 -> control ID 0x1FF.
+// M3508 / M2006：反馈 ID 0x201-0x204 对应控制 ID 0x200，0x205-0x208 对应控制 ID 0x1FF。
 #define M3508_M2006_FB_ID_BASE (0x201)
 #define M3508_M2006_FB_ID_EXTAND (0x205)
 #define M3508_M2006_CTRL_ID_BASE (0x200)
