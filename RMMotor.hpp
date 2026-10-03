@@ -145,10 +145,10 @@ class RMMotor : public Motor
    * @param param 构造参数。
    *              Construction parameters.
    */
-  RMMotor(
-      LibXR::CAN& can_bus,
-      const Param& param = {
-      .model = RMMotor::Model::MOTOR_M3508, .reverse = false, .feedback_id = 0x201}) : param_(param), can_(std::addressof(can_bus))
+  RMMotor(LibXR::CAN& can_bus, const Param& param = {.model = RMMotor::Model::MOTOR_M3508,
+                                                     .reverse = false,
+                                                     .feedback_id = 0x201})
+      : param_(param), can_(std::addressof(can_bus))
   {
     reverse_flag_ = param_.reverse ? -1.0f : 1.0f;
 
