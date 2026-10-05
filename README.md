@@ -4,7 +4,7 @@ RoboMaster 电机驱动模块（M2006 / M3508 / GM6020）：CAN 收发、反馈�
 
 ## 1. 模块作用 / Purpose
 
-RMMotor 实现 `Motor` 接口，驱动 M2006、M3508 与 GM6020 电机。构造时按型号和 `feedback_id` 确定控制帧 ID 和本电机在控制帧中的槽位，并注册该反馈 ID 的标准帧回调。接收队列深度为 1，只保留最新一帧反馈。
+RMMotor 实现 `Motor` 接口，驱动 M2006、M3508 与 GM6020 电机。构造时按型号和 `feedback_id` 确定控制帧 ID 和本电机在控制帧中的槽位，并注册该反馈 ID 的标准帧回调。反馈帧存入 LibXR 的 `LatestSnapshot`，只保留最新一帧。
 
 | 型号 | `feedback_id` | 控制帧 ID |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ RMMotor 实现 `Motor` 接口，驱动 M2006、M3508 与 GM6020 电机。构造�
 | `MOTOR_M3508` | 0.0156224 | 20 | 16384 |
 | `MOTOR_GM6020` | 0.741 | 3 | 16384 |
 
-RMMotor implements the `Motor` interface and drives M2006, M3508 and GM6020 motors. At construction it determines the control frame ID and the slot of the motor in the control frame from the model and `feedback_id`, and registers a standard-frame callback for that feedback ID. The receive queue has depth 1 and keeps only the latest feedback frame.
+RMMotor implements the `Motor` interface and drives M2006, M3508 and GM6020 motors. At construction it determines the control frame ID and the slot of the motor in the control frame from the model and `feedback_id`, and registers a standard-frame callback for that feedback ID. Feedback frames are stored in LibXR's `LatestSnapshot`, which keeps only the latest frame.
 
 | Model | `feedback_id` | Control frame ID |
 | --- | --- | --- |
