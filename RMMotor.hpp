@@ -18,6 +18,7 @@ depends:
 #include "Motor.hpp"
 #include "can.hpp"
 #include "cycle_value.hpp"
+#include "latest_snapshot.hpp"
 #include "libxr_def.hpp"
 #include "libxr_type.hpp"
 #include "mutex.hpp"
@@ -257,8 +258,8 @@ class RMMotor : public Motor
   void Relax() override { CurrentControl(0.0f); }
 
   /**
-   * @brief 解码队列中的反馈帧并更新反馈。
-   *        Decode the queued feedback frames and update the feedback.
+   * @brief 解码最新的反馈帧并更新反馈。
+   *        Decode the latest feedback frame and update the feedback.
    *
    * @return 本次收到反馈或连续无反馈次数未超过 255 时为 `ErrorCode::OK`，否则为
    *         `ErrorCode::NO_RESPONSE`。
@@ -269,7 +270,7 @@ class RMMotor : public Motor
   {
     LibXR::CAN::ClassicPack pack;
     bool get_feedback = false;
-    while (recv_queue_.Pop(pack) == LibXR::ErrorCode::OK)
+    if (feedback_frame_.LoadLatest(pack))
     {
       Decode(pack);
       get_feedback = true;
@@ -350,7 +351,8 @@ class RMMotor : public Motor
 
   LibXR::CAN* can_;        ///< 所在 CAN 总线 CAN bus of the motor
   BusState* bus_state_{};  ///< 所在总线的共享状态 Shared state of the bus
-  LibXR::MPMCQueue<LibXR::CAN::ClassicPack> recv_queue_{1};  ///< 接收队列 Receive queue
+  LibXR::LatestSnapshot<LibXR::CAN::ClassicPack> feedback_frame_{
+      LibXR::CAN::ClassicPack{}};  ///< 最新的反馈帧 Latest feedback frame
 
   static inline LibXR::Mutex bus_state_registry_mutex_{};  ///< 注册表互斥锁 Registry lock
   static inline BusState* bus_state_registry_head_{};      ///< 注册表头 Registry head
@@ -393,17 +395,14 @@ class RMMotor : public Motor
    * @param pack 接收到的 CAN 帧。
    *             Received CAN frame.
    *
-   * @details 队列已满时先弹出最旧的一帧，再压入新帧。
-   *          When the queue is full the oldest frame is popped before the new one is
-   *          pushed.
+   * @details 保存最新的反馈帧，覆盖尚未取走的旧帧。
+   *          Stores the latest feedback frame, replacing an older frame that has not
+   *          been taken.
    */
   static void RxCallback(bool in_isr, RMMotor* self, const LibXR::CAN::ClassicPack& pack)
   {
     UNUSED(in_isr);
-    while (self->recv_queue_.Push(pack) != LibXR::ErrorCode::OK)
-    {
-      self->recv_queue_.Pop();
-    }
+    self->feedback_frame_.Store(pack);
   }
 
   /**
