@@ -131,7 +131,7 @@ class RMMotor : public Motor
    */
   struct BusState
   {
-    LibXR::CAN* can{};  ///< CAN 对象 CAN object
+    LibXR::CAN* can{};                               ///< CAN 对象 CAN object
     MotorGroupState groups[MOTOR_CTRL_ID_NUMBER]{};  ///< 4 个控制组 4 control groups
     BusState* next{};  ///< 注册表链表的下一项 Next entry of the registry list
   };
@@ -434,8 +434,8 @@ class RMMotor : public Motor
 
     feedback_.abs_angle = LibXR::CycleValue<float>(feedback_.position);
     feedback_.omega = feedback_.velocity * (static_cast<float>(LibXR::TWO_PI) / 60.0f);
-    feedback_.torque =
-        static_cast<float>(raw_current) * KGetTorque() * GetCurrentMAX() / MOTOR_CUR_RES;
+    feedback_.torque = static_cast<float>(raw_current) * KGetTorque() * GetCurrentMAX() *
+                       reverse_flag_ / MOTOR_CUR_RES;
     feedback_.temp = static_cast<float>(raw_temp);
     feedback_.state = 1;
   }
